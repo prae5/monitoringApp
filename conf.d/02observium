@@ -1,0 +1,91 @@
+#!/bin/bash -ex
+
+HOSTNAME=monitoring
+USERNAME=monitoring
+PASSWORD=monitoring
+GROUPNAME=monitoring
+MYSQLUSER=observium
+MYSQLPASSWORD=observium
+
+# create the monitoring userid (which all the monitoring daemons run as)
+groupadd $GROUPNAME
+useradd -c "Default userid" -d /home/$USERNAME -g $GROUPNAME -m -s /bin/bash "$USERNAME"
+chown -R $USERNAME:$GROUPNAME /home/$USERNAME
+
+####################################################
+# INSTALL OBSERVIUM
+####################################################
+mkdir -p /opt/observium 
+cd /opt
+wget http://www.observium.org/observium-community-latest.tar.gz
+tar zxvf observium-community-latest.tar.gz
+cd observium
+
+####################################################
+# INSTALL DEPENDENCIES
+####################################################
+DEBIAN_FRONTEND=noninteractive apt-get -y \
+    -o DPkg::Options::=--force-confdef \
+    -o DPkg::Options::=--force-confold \
+    install \
+    libapache2-mod-php5 php5-cli php5-mysql \
+    php5-gd php5-snmp php-pear snmp graphviz \
+    mysql-server mysql-client rrdtool \
+    fping imagemagick whois mtr-tiny nmap ipmitool \
+    libvirt-bin php5-mcrypt python-mysqldb 
+
+mysqladmin -u root password $MYSQLPASSWORD
+
+####################################################
+# INSTALL IPv4/IPv6 pear libraries
+####################################################
+pear install Net_IPv4
+pear install Net_IPv6
+
+####################################################
+# CONFIGURE OBSERVIUM
+####################################################
+cp config.php.default config.php
+sed -i "s|USERNAME|$MYSQLUSER|" config.php
+sed -i "s|PASSWORD|$MYSQLPASSWORD|" config.php
+mkdir graphs rrd
+chown www-data:www-data graphs rrd
+
+mysql -u root -p$MYSQLPASSWORD -e "create database observium;"
+mysql -u root -p$MYSQLPASSWORD -e "grant all privileges on observium.* to '$MYSQLUSER'@'localhost' identified by '$MYSQLPASSWORD';"
+
+php includes/update/update.php
+
+
+####################################################
+# Final tasks
+####################################################
+a2enmod rewrite
+# apache2ctl restart
+
+./adduser.php $USERNAME $PASSWORD 10
+
+# setup iptables to allow traffic on our ports
+# iptables -A INPUT -i eth0 -p tcp -m multiport --dports 8080,8081,8085 -m state --state NEW,ESTABLISHED -j ACCEPT
+
+# Create the service file
+echo "Observium:      http://\$ipaddr"            > /etc/confconsole/services.txt
+echo "Web Shell:      http://\$ipaddr:12320"     >> /etc/confconsole/services.txt
+echo "Webmin:         http://\$ipaddr:12321"     >> /etc/confconsole/services.txt
+echo "SMB/CIFS:       nzbapp (ports 139/445)"    >> /etc/confconsole/services.txt
+echo >> /etc/confconsole/services.txt
+echo "   Note: Default userid/password for Observium is:"  >> /etc/confconsole/services.txt
+echo "         observium/observium" >> /etc/confconsole/services.txt
+
+
+service mysql stop
+service apache2 stop
+
+####################################################
+# done!
+####################################################
+exit
+
+
+
+
